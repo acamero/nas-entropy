@@ -63,11 +63,16 @@ def evaluate_model(
         X,
         y,
         samp_per_weights=1,
+        train=False,
         seed=None):
     """ Compute metrics
     Input:
         model    NAS-Bench-101 model description (matrix and labels)
-        config   
+        config   configuration of the encoding
+        X        input training data
+        y        input labels
+        samp_per_weights    number of samples evaluated before updating the weights
+        train    if False, the weights are randomly set. If True, the network is trained for 1 epoch on X
     """
     # Adjacency matrix and nuberically-coded layer list
     matrix, labels = model
@@ -81,23 +86,35 @@ def evaluate_model(
     # module = tf.keras.Model(inputs=inputs, outputs=outputs)
     # module.summary()
     # Create whole network with same config
-    features = tf.keras.layers.Input(train_images.shape[1:], 1)
+    features = tf.keras.layers.Input(train_images.shape[1:], None)
     net_outputs = build_keras_model(spec, features, labels, config)
     net = tf.keras.Model(inputs=features, outputs=net_outputs)
     # net.summary()
+    X = X / 255
+    if train:
+        net.compile(
+            optimizer=tf.keras.optimizers.RMSprop(),
+            loss=tf.keras.losses.SparseCategoricalCrossentropy(),
+            metrics=[tf.keras.metrics.SparseCategoricalAccuracy()],
+        )
+        history = net.fit(
+            X,
+            y,
+            epochs=1,
+        )
     aug_h = list()
     aug_base_h = list()
     y_prima = dict()
     for k in np.unique(y):
         y_prima[k] = None
     for i in range(len(X)):
-        img = X[i] / 255
+        img = X[i]
         # augment data
         augmented_batch = augment_sample(img, seed)
         # prepare the batch
         batch = np.stack(augmented_batch)
         # reset the weights, predict, and compute entropy
-        if 1 % samp_per_weights == 0:
+        if (1 % samp_per_weights == 0 and not train):
             weights = prepare_weights(net)
             net.set_weights(weights)
         _pred = tf.nn.softmax(net.predict(batch)).numpy()
@@ -178,6 +195,11 @@ if __name__ == '__main__':
       type=str,
       default='data/evaluated_models.json',
       help='Output file (default data/evaluated_models.json.')
+    parser.add_argument(
+      '--train',
+      action='store_true',
+      help='Output file (default data/evaluated_models.json.')
+    parser.set_defaults(train=False)
 
     flags, unparsed = parser.parse_known_args()
     print("Config", 	flags)
@@ -212,6 +234,7 @@ if __name__ == '__main__':
             X=train_images[:flags.samples],
             y=train_labels[:flags.samples],
             samp_per_weights=flags.refresh,
+            train=flags.train,
             seed=flags.seed)
         metrics['eval_time'] = time.time() - start
         metrics['model_key'] = _key
